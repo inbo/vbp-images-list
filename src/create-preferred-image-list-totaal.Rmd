@@ -46,12 +46,12 @@ galah_config(
 # (Je kunt groepen uitschakelen door er een # voor te zetten)
 GROEPEN <- list(
   mossen         = c("Bryophyta", "Marchantiophyta", "Anthocerotophyta")
-  #,
-  #vaatplanten   = "Tracheophyta",
-  #schimmels      = "Fungi",
-  #geleedpotigen  = "Arthropoda",
-  #gewervelden    = "Chordata",
-  #weekdieren     = "Mollusca"
+  ,
+  vaatplanten   = "Tracheophyta",
+  schimmels      = "Fungi",
+  geleedpotigen  = "Arthropoda",
+  gewervelden    = "Chordata",
+  weekdieren     = "Mollusca"
 )
 
 # Zet op TRUE om uitsluitend dr12 (iNaturalist) te gebruiken
