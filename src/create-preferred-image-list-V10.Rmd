@@ -130,8 +130,7 @@ verwerk_groep <- function(groep_naam, taxon_filter) {
   
   soorten_lijst <- soorten_basis |>
     transmute(
-      `Opgegeven naam`         = scientificName,
-      `Wetenschappelijke naam` = scientificName,
+      `scientificName`         = scientificName,
       `imageId`                = imageId,
       `rawfamily`              = replace_na(as.character(family), ""),
       `Familie`                = replace_na(as.character(family), ""),
@@ -148,8 +147,7 @@ verwerk_groep <- function(groep_naam, taxon_filter) {
       arrange(desc(aantal_fotos), desc(eventDate)) |>
       distinct(genus, .keep_all = TRUE) |>
       transmute(
-        `Opgegeven naam`         = as.character(genus),
-        `Wetenschappelijke naam` = as.character(genus),
+        `scientificName`         = as.character(genus),
         `imageId`                = imageId,
         `rawfamily`              = replace_na(as.character(family), ""),
         `Familie`                = replace_na(as.character(family), ""),
@@ -167,8 +165,7 @@ verwerk_groep <- function(groep_naam, taxon_filter) {
       arrange(desc(aantal_fotos), desc(eventDate)) |>
       distinct(family, .keep_all = TRUE) |>
       transmute(
-        `Opgegeven naam`         = as.character(family),
-        `Wetenschappelijke naam` = as.character(family),
+        `scientificName`         = as.character(family),
         `imageId`                = imageId,
         `rawfamily`              = as.character(family),
         `Familie`                = as.character(family),
@@ -180,8 +177,8 @@ verwerk_groep <- function(groep_naam, taxon_filter) {
   
   # Combineer soorten + genera + families en ontdubbel op Wetenschappelijke naam
   preferred_lijst <- bind_rows(soorten_lijst, genera_lijst, families_lijst) |>
-    distinct(`Wetenschappelijke naam`, .keep_all = TRUE) |>
-    arrange(`Wetenschappelijke naam`)
+    distinct(`scientificName`, .keep_all = TRUE) |>
+    arrange(`scientificName`)
   
   bestandsnaam <- file.path(OUTPUT_DIR, paste0("preferred_images_dr12_", groep_naam, ".csv"))
   write_csv(preferred_lijst, bestandsnaam, na = "")
@@ -199,8 +196,8 @@ verwerk_groep <- function(groep_naam, taxon_filter) {
 alle_lijsten <- imap(GROEPEN, ~ verwerk_groep(groep_naam = .y, taxon_filter = .x))
 
 totaal_lijst <- bind_rows(alle_lijsten) |>
-  distinct(`Wetenschappelijke naam`, .keep_all = TRUE) |>
-  arrange(Rijk, Familie, `Wetenschappelijke naam`)
+  distinct(`scientificName`, .keep_all = TRUE) |>
+  arrange(Rijk, Familie, `scientificName`)
 
 totaal_bestand <- file.path(OUTPUT_DIR, "preferred_images_dr12_totaal.csv")
 write_csv(totaal_lijst, totaal_bestand, na = "")
