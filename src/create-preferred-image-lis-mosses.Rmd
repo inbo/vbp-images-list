@@ -1,0 +1,204 @@
+---
+title: "Preferred Image List samenstellen: Mossen (Vlaams Biodiversiteitsportaal via galah)"
+author: "INBO / Vlaams Biodiversiteitsportaal"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## 1. Doel en werkwijze
+
+Dit R Markdown-document gebruikt het **`galah`**-pakket om het Vlaams Biodiversiteitsportaal (`natuurdata.inbo.be`) te bevragen en een **preferred image list** op te bouwen voor de mossen (*Bryophyta*, *Marchantiophyta* en *Anthocerotophyta*).
+
+1. We configureren `galah` voor het Vlaams Biodiversiteitsportaal (`natuurdata.inbo.be`).
+2. Met `atlas_species()` halen we alle unieke mossoorten op die minstens één afbeelding (`multimedia == "Image"`) hebben.
+3. Per soort halen we via `atlas_occurrences()` één geverifieerde waarneming met afbeelding op (bij voorkeur uit iNaturalist `dr12`, met fallback naar alle datasets) om het `imageId` te extraheren.
+4. We exporteren het resultaat in exact de vereiste kolomstructuur als `.tsv`.
+
+---
+
+## 2. Packages en `galah`-configuratie
+
+*(Opmerking: Vul hieronder een geldig e-mailadres in; `galah` vereist dat voor downloads/queries bij de Living Atlas.)*
+
+```{r libraries-and-config}
+# Installeer indien nodig: install.packages("galah")
+library(galah)
+library(dplyr)
+library(purrr)
+library(stringr)
+library(readr)
+library(knitr)
+library(tidyr)
+
+# Configureer galah voor het Vlaams Biodiversiteitsportaal (VBP)
+# Controleer eventueel met show_all_atlases() of "Belgium" / "Flanders" geregistreerd staat,
+# of stel de VBP-URL's rechtstreeks in:
+galah_config(
+  email = "dimitri.brosens@inbo.be",
+  atlas = "VBP",
+  verbose = FALSE
+)
+
+# Als jouw galah-versie "Belgium" nog naar gbif.be stuurt i.p.v. natuurdata.inbo.be,
+# uncomment dan onderstaande blok om expliciet naar natuurdata.inbo.be te wijzen:
+# galah_config(
+#   email = "jouw.naam@inbo.be",
+#   atlas = list(
+#     region = "Flanders",
+#     acronym = "VBP",
+#     url = "[https://natuurdata.inbo.be](https://natuurdata.inbo.be)",
+#     biocache_service = "[https://natuurdata.inbo.be/biocache-service](https://natuurdata.inbo.be/biocache-service)",
+#     bie_service = "[https://natuurdata.inbo.be/bie-index](https://natuurdata.inbo.be/bie-index)",
+#     images_service = "[https://natuurdata.inbo.be/image-service](https://natuurdata.inbo.be/image-service)",
+#     lists_service = "[https://natuurdata.inbo.be/specieslist-ws](https://natuurdata.inbo.be/specieslist-ws)"
+#   )
+# )
+
+# Mossen-groepen (bladmossen, levermossen, hauwmossen)
+MOS_GROEPEN <- c("Bryophyta", "Marchantiophyta", "Anthocerotophyta")
+
+# Zet op TRUE om eerst snel te testen met 15 soorten; zet op FALSE voor de volledige lijst
+TEST_MODUS <- TRUE
+AANTAL_TEST <- 15
+```
+
+---
+
+## 3. Unieke mossoorten met afbeelding ophalen via `galah`
+
+```{r fetch-species}
+mos_soorten_df <- galah_call() |>
+  galah_identify(MOS_GROEPEN) |>
+  galah_filter(multimedia == "Image") |>
+  atlas_species()
+
+cat("Totaal aantal unieke mossoorten met afbeelding gevonden:", nrow(mos_soorten_df), "\n")
+
+if (TEST_MODUS) {
+  soorten_selectie <- head(mos_soorten_df, AANTAL_TEST)
+  cat("TEST_MODUS staat aan: we verwerken de eerste", nrow(soorten_selectie), "soorten.\n")
+} else {
+  soorten_selectie <- mos_soorten_df
+}
+```
+
+---
+
+## 4. `imageId` ophalen per soort
+
+We zoeken per soort één record met afbeelding. Eerst kijken we binnen iNaturalist (`dataResourceUid == "dr12"`), en als daar niets voor die soort zit, zoeken we over alle datasets heen.
+
+*(Tip: met `show_all_fields()` in `galah` kun je nagaan of het afbeeldingsveld op VBP `images` of `all_image_url` heet.)*
+
+```{r fetch-images}
+# Controleer welk afbeeldingsveld beschikbaar is in de VBP-index
+beschikbare_velden <- show_all_fields()$id
+img_veld <- intersect(c("images", "all_image_url", "image_url"), beschikbare_velden)[1]
+if (is.na(img_veld)) img_veld <- "images"
+
+haal_preferred_image_voor_rij <- function(i, df) {
+  rij <- df[i, ]
+  soort_naam <- rij$species_name
+  if (is.na(soort_naam) || soort_naam == "") soort_naam <- rij$taxon_name
+  
+  Sys.sleep(0.15)
+  
+  # Poging 1: Zoek binnen iNaturalist (dr12)
+  occ <- tryCatch({
+    galah_call() |>
+      galah_identify(soort_naam) |>
+      galah_filter(
+        multimedia == "Image",
+        dataResourceUid == "dr12"
+      ) |>
+      galah_select(scientificName, family, raw_family, kingdom, vernacularName, all_of(img_veld)) |>
+      atlas_occurrences() |>
+      slice(1)
+  }, error = function(e) NULL)
+  
+  # Poging 2 (fallback): Zoek over alle datasets heen
+  if (is.null(occ) || nrow(occ) == 0) {
+    occ <- tryCatch({
+      galah_call() |>
+        galah_identify(soort_naam) |>
+        galah_filter(multimedia == "Image") |>
+        galah_select(scientificName, family, raw_family, kingdom, vernacularName, all_of(img_veld)) |>
+        atlas_occurrences() |>
+        slice(1)
+    }, error = function(e) NULL)
+  }
+  
+  if (is.null(occ) || nrow(occ) == 0) return(NULL)
+  
+  # Extraheer de pure UUID van het imageId uit het afbeeldingsveld
+  img_raw <- as.character(occ[[img_veld]][1])
+  img_id <- str_extract(
+    img_raw,
+    "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+  )
+  
+  if (is.na(img_id) || img_id == "") return(NULL)
+  
+  # Gebruik velden uit occ of val terug op de kolommen uit atlas_species()
+  sci_name   <- coalesce(na_if(as.character(occ$scientificName[1]), ""), soort_naam)
+  family     <- coalesce(na_if(as.character(occ$family[1]), ""), as.character(rij$family))
+  raw_family <- if ("raw_family" %in% names(occ)) {
+    coalesce(na_if(as.character(occ$raw_family[1]), ""), family)
+  } else {
+    family
+  }
+  kingdom    <- coalesce(na_if(as.character(occ$kingdom[1]), ""), as.character(rij$kingdom))
+  vernacular <- if ("vernacularName" %in% names(occ) && !is.na(occ$vernacularName[1])) {
+    as.character(occ$vernacularName[1])
+  } else if ("vernacular_name" %in% names(rij) && !is.na(rij$vernacular_name)) {
+    as.character(rij$vernacular_name)
+  } else {
+    ""
+  }
+  
+  tibble(
+    `Opgegeven naam`         = sci_name,
+    `Wetenschappelijke naam` = sci_name,
+    `imageId`                = img_id,
+    `rawfamily`              = replace_na(raw_family, ""),
+    `Familie`                = replace_na(family, ""),
+    `Rijk`                   = replace_na(kingdom, ""),
+    `Volkstaalnaam`          = replace_na(vernacular, ""),
+    `Match-type`             = if (sci_name != "") "Exacte match" else ""
+  )
+}
+
+preferred_mossen <- map_dfr(seq_len(nrow(soorten_selectie)), haal_preferred_image_voor_rij, df = soorten_selectie)
+```
+
+---
+
+## 5. Resultaat controleren en exporteren
+
+```{r preview-table}
+preferred_mossen |>
+  head(10) |>
+  kable(caption = "Voorbeeld van de gegenereerde preferred image list voor mossen")
+```
+
+
+```{r export-csv}
+output_bestandsnaam <- "data/processed/preferred_images_mossen.csv"
+write_csv(preferred_mossen, output_bestandsnaam, na = "")
+
+cat("Bestand succesvol opgeslagen als:", output_bestandsnaam, 
+    "met", nrow(preferred_mossen), "unieke taxa.\n")
+```

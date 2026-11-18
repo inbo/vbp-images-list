@@ -1,0 +1,178 @@
+---
+title: "Preferred Image List samenstellen & samenvoegen (VBP - dr12)"
+author: "Dimitri Brosens (INBO / Vlaams Biodiversiteitsportaal)"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    code_folding: show
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## 1. Doel en werkwijze
+
+Dit R Markdown-document bouwt per taxonomische hoofdgroep een **preferred image list** op uit **iNaturalist (`dataResourceUid == "dr12"`)** op het Vlaams Biodiversiteitsportaal (`VBP`), schrijft deze per groep weg als CSV in `data/processed/`, en voegt ze daarna samen tot één totaalbestand.
+
+---
+
+## 2. Packages en configuratie
+
+```{r libraries-and-config}
+library(galah)
+library(dplyr)
+library(tidyr)
+library(purrr)
+library(stringr)
+library(readr)
+library(here)
+library(knitr)
+
+galah_config(
+  email = "dimitri.brosens@inbo.be",
+  atlas = "VBP",
+  verbose = FALSE
+)
+
+# Definieer de groepen die je wilt verwerken
+# (Je kunt groepen uitschakelen door er een # voor te zetten)
+GROEPEN <- list(
+  mossen         = c("Bryophyta", "Marchantiophyta", "Anthocerotophyta")
+  #,
+  #vaatplanten   = "Tracheophyta",
+  #schimmels      = "Fungi",
+  #geleedpotigen  = "Arthropoda",
+  #gewervelden    = "Chordata",
+  #weekdieren     = "Mollusca"
+)
+
+# Zet op TRUE om uitsluitend dr12 (iNaturalist) te gebruiken
+ALLEEN_DR12 <- TRUE
+
+# Optioneel: minimum aantal foto's per soort in dr12 (zet op 2 of 3 voor een compactere lijst)
+MIN_AANTAL_FOTOS <- 1
+
+# Outputmap verankerd aan de projectroot via here()
+OUTPUT_DIR <- here("data", "processed")
+```
+
+---
+
+## 3. Functie om één groep te verwerken en op te slaan
+
+```{r function-process-group}
+verwerk_groep <- function(groep_naam, taxon_filter) {
+  message("--- Start verwerking groep: ", groep_naam, " ---")
+  
+  ruwe_images <- tryCatch({
+    galah_call() |>
+      galah_identify(taxon_filter) |>
+      galah_filter(multimedia == "Image") |>
+      galah_select(
+        scientificName,
+        taxonRank,
+        family,
+        kingdom,
+        vernacularName,
+        dataResourceUid,
+        eventDate,
+        images
+      ) |>
+      atlas_occurrences()
+  }, error = function(e) {
+    warning("Fout bij ophalen van groep ", groep_naam, ": ", e$message)
+    return(NULL)
+  })
+  
+  if (is.null(ruwe_images) || nrow(ruwe_images) == 0) {
+    message("Geen records gevonden voor: ", groep_naam)
+    return(NULL)
+  }
+  
+  gefilterde_data <- ruwe_images |>
+    filter(
+      !is.na(scientificName),
+      scientificName != "",
+      taxonRank %in% c("species", "subspecies", "variety")
+    ) |>
+    mutate(
+      imageId = str_extract(
+        as.character(images),
+        "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+      ),
+      is_dr12 = coalesce(dataResourceUid == "dr12", FALSE)
+    ) |>
+    filter(!is.na(imageId), imageId != "")
+  
+  if (ALLEEN_DR12) {
+    gefilterde_data <- gefilterde_data |> filter(is_dr12)
+  }
+  
+  preferred_lijst <- gefilterde_data |>
+    add_count(scientificName, name = "aantal_fotos") |>
+    filter(aantal_fotos >= MIN_AANTAL_FOTOS) |>
+    arrange(desc(is_dr12), desc(eventDate)) |>
+    distinct(scientificName, .keep_all = TRUE) |>
+    transmute(
+      `Opgegeven naam`         = scientificName,
+      `Wetenschappelijke naam` = scientificName,
+      `imageId`                = imageId,
+      `rawfamily`              = replace_na(as.character(family), ""),
+      `Familie`                = replace_na(as.character(family), ""),
+      `Rijk`                   = replace_na(as.character(kingdom), ""),
+      `Volkstaalnaam`          = replace_na(as.character(vernacularName), ""),
+      `Match-type`             = "Exacte match"
+    ) |>
+    arrange(`Wetenschappelijke naam`)
+  
+  # Sla de afzonderlijke groepslijst op in projectroot/data/processed/
+  bestandsnaam <- file.path(OUTPUT_DIR, paste0("preferred_images_dr12_", groep_naam, ".csv"))
+  write_csv(preferred_lijst, bestandsnaam, na = "")
+  message("Opgeslagen: ", bestandsnaam, " (", nrow(preferred_lijst), " soorten)")
+  
+  return(preferred_lijst)
+}
+```
+
+---
+
+## 4. Alle groepen verwerken en samenvoegen tot 1 totaallijst
+
+```{r run-and-merge}
+# Verwerk alle groepen uit de lijst GROEPEN
+alle_lijsten <- imap(GROEPEN, ~ verwerk_groep(groep_naam = .y, taxon_filter = .x))
+
+# Voeg alle losse data.frames samen en ontdubbel voor de zekerheid op Wetenschappelijke naam
+totaal_lijst <- bind_rows(alle_lijsten) |>
+  distinct(`Wetenschappelijke naam`, .keep_all = TRUE) |>
+  arrange(Rijk, Familie, `Wetenschappelijke naam`)
+
+# Sla het gecombineerde totaalbestand op
+totaal_bestand <- file.path(OUTPUT_DIR, "preferred_images_dr12_totaal.csv")
+write_csv(totaal_lijst, totaal_bestand, na = "")
+
+cat("Totaalbestand opgeslagen als:", totaal_bestand, 
+    "met in totaal", nrow(totaal_lijst), "unieke soorten.\n")
+```
+
+---
+
+## 5. Overzicht per Rijk en voorbeeld van de totaallijst
+
+```{r summary-and-preview}
+totaal_lijst |>
+  count(Rijk, name = "Aantal soorten") |>
+  kable(caption = "Verdeling van het aantal unieke soorten per Rijk")
+
+totaal_lijst |>
+  head(15) |>
+  kable(caption = "Eerste 15 rijen van de samengevoegde preferred image list")
+```
